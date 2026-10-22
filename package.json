@@ -1,0 +1,25 @@
+{
+  "name": "devcol-analytics",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit && vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply devcol-analytics --local",
+    "db:migrate:remote": "wrangler d1 migrations apply devcol-analytics --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.7",
+    "@cloudflare/workers-types": "^5.20261022.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.152.0"
+  },
+  "allowScripts": {
+    "workerd@1.20261019.1": true,
+    "esbuild@0.28.2": true
+  }
+}

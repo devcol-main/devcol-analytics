@@ -1,0 +1,29 @@
+# DevCol Analytics Worker. 비밀값 없음 — ACCESS_TEAM_DOMAIN / ACCESS_AUD는 `wrangler secret put`으로만 설정한다.
+name = "devcol-analytics"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+routes = [{ pattern = "a.devcol.net", custom_domain = true }]
+
+[vars]
+ALLOWED_ORIGINS = "https://devcol.net,https://www.devcol.net"
+ALLOW_LOCALHOST = "false"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "devcol-analytics"
+database_id = "6389b65a-67db-4565-a66e-f860455242a4"
+migrations_dir = "migrations"
+
+# 매일 00:10 KST (= 15:10 UTC): 전날 집계 + 보관기간 정리
+[triggers]
+crons = ["10 15 * * *"]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
+[observability]
+enabled = true
