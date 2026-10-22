@@ -1,1 +1,285 @@
-<!doctype html><title>DevCol Analytics</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>DevCol Analytics</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+  :root {
+    --bg: #eef0f8; --panel: #ffffff; --ink: #0e1020; --ink-2: #4a5070; --line: rgba(14,16,32,.12);
+    --accent: #2a40d8; --accent-2: #0f9bb8; --warn: #b4560a;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b0d1a; --panel: #12152a; --ink: #e8ebf7; --ink-2: #9aa2c4; --line: rgba(160,172,230,.14);
+      --accent: #8f9cff; --accent-2: #4fd1e8; --warn: #f2b43c; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0; }
+  main { max-width: 1200px; margin: 0 auto; padding: 0 16px 48px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; color: var(--ink-2); padding: 6px 12px; font: inherit; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); margin: 0 0 12px; }
+  .wide { grid-column: 1 / -1; }
+  .kpis { display: flex; flex-wrap: wrap; gap: 24px; }
+  .kpi b { display: block; font-size: 28px; font-variant-numeric: tabular-nums; }
+  .kpi span { color: var(--ink-2); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--ink-2); font-weight: 500; font-size: 12px; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.path { word-break: break-all; }
+  .chart { position: relative; height: 260px; }
+  .muted { color: var(--ink-2); }
+  .err { color: var(--warn); }
+  [hidden] { display: none !important; }
+  .tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .tools button.act { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 6px 10px; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DevCol Analytics</h1>
+  <div class="tools">
+    <div class="seg" id="tabs" role="tablist">
+      <button data-tab="site" aria-pressed="true">Site</button>
+      <button data-tab="games" aria-pressed="false">Games</button>
+      <button data-tab="live" aria-pressed="false">Realtime</button>
+    </div>
+    <div class="seg" id="range">
+      <button data-days="7" aria-pressed="false">7d</button>
+      <button data-days="30" aria-pressed="true">30d</button>
+      <button data-days="90" aria-pressed="false">90d</button>
+    </div>
+    <button class="act" id="agg" title="Re-run the daily aggregation for today (KST) so /public/summary reflects it">Aggregate today</button>
+  </div>
+</header>
+<main>
+  <p id="status" class="muted"></p>
+
+  <section id="tab-site" class="grid">
+    <div class="panel wide"><div class="kpis" id="site-kpis"></div></div>
+    <div class="panel wide"><h2>Daily page views / visitors</h2><div class="chart"><canvas id="c-daily"></canvas></div></div>
+    <div class="panel wide"><h2>Top pages</h2><table id="t-pages"></table></div>
+    <div class="panel"><h2>Referrers</h2><table id="t-refs"></table></div>
+    <div class="panel"><h2>UTM sources</h2><table id="t-utm"></table></div>
+    <div class="panel"><h2>Countries</h2><table id="t-countries"></table></div>
+    <div class="panel"><h2>Devices</h2><table id="t-devices"></table></div>
+    <div class="panel"><h2>Browsers</h2><table id="t-browsers"></table></div>
+    <div class="panel wide"><h2>Engagement by page (from page_leave)</h2><table id="t-engage"></table></div>
+  </section>
+
+  <section id="tab-games" class="grid" hidden></section>
+
+  <section id="tab-live" class="grid" hidden>
+    <div class="panel wide"><div class="kpis" id="live-kpis"></div></div>
+    <div class="panel"><h2>Events by type · last 30 min</h2><table id="t-live-types"></table></div>
+    <div class="panel"><h2>Being viewed now (last 5 min)</h2><table id="t-live-pages"></table></div>
+  </section>
+</main>
+<script>
+(() => {
+  'use strict'
+  const $ = (id) => document.getElementById(id)
+  const state = { tab: 'site', days: 30 }
+  const charts = {}
+  let liveTimer = 0
+
+  const fmt = (n) => (n == null ? '–' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 1 }))
+  const secs = (ms) => (ms == null ? '–' : (ms / 1000).toFixed(1) + 's')
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+
+  // All values from the database are visitor-controlled: build DOM with textContent only.
+  function el(tag, text, cls) {
+    const e = document.createElement(tag)
+    if (text != null) e.textContent = String(text)
+    if (cls) e.className = cls
+    return e
+  }
+  function table(target, cols, rows) {
+    const t = typeof target === 'string' ? $(target) : target
+    t.replaceChildren()
+    if (!rows.length) {
+      t.append(el('caption', 'No data', 'muted'))
+      return t
+    }
+    const head = el('tr')
+    for (const c of cols) head.append(el('th', c.label, c.num ? 'n' : ''))
+    t.appendChild(el('thead')).append(head)
+    const body = el('tbody')
+    for (const r of rows) {
+      const tr = el('tr')
+      for (const c of cols) tr.append(el('td', c.fmt ? c.fmt(r[c.key], r) : r[c.key], c.num ? 'n' : c.cls || ''))
+      body.append(tr)
+    }
+    t.append(body)
+    return t
+  }
+  function kpis(target, items) {
+    $(target).replaceChildren(...items.map(([label, value]) => {
+      const d = el('div', null, 'kpi')
+      d.append(el('b', value), el('span', label))
+      return d
+    }))
+  }
+  function chart(canvas, config) {
+    const key = typeof canvas === 'string' ? canvas : canvas.id
+    charts[key]?.destroy()
+    if (!window.Chart) return
+    const c = typeof canvas === 'string' ? $(canvas) : canvas
+    Chart.defaults.color = css('--ink-2')
+    Chart.defaults.borderColor = css('--line')
+    charts[key] = new Chart(c, { ...config, options: { maintainAspectRatio: false, animation: false, ...config.options } })
+  }
+
+  async function api(path, init) {
+    const res = await fetch(path, { credentials: 'same-origin', ...init })
+    if (!res.ok) throw new Error(path + ' → HTTP ' + res.status)
+    return res.json()
+  }
+  const status = (msg, err) => { $('status').textContent = msg || ''; $('status').className = err ? 'err' : 'muted' }
+
+  const kv = [{ key: 'k', label: 'Value' }, { key: 'n', label: 'Views', num: true, fmt }]
+
+  async function loadSite() {
+    const d = await api('/admin/api/site?days=' + state.days)
+    const pv = d.daily.reduce((a, r) => a + (r.pv || 0), 0)
+    const uv = d.daily.reduce((a, r) => a + (r.uv || 0), 0)
+    kpis('site-kpis', [['Page views', fmt(pv)], ['Visitors (sum of daily uniques)', fmt(uv)], ['Days with data', d.daily.length]])
+    chart('c-daily', {
+      type: 'line',
+      data: {
+        labels: d.daily.map((r) => r.day),
+        datasets: [
+          { label: 'Page views', data: d.daily.map((r) => r.pv), borderColor: css('--accent'), backgroundColor: css('--accent'), tension: 0.25 },
+          { label: 'Visitors', data: d.daily.map((r) => r.uv), borderColor: css('--accent-2'), backgroundColor: css('--accent-2'), tension: 0.25 },
+        ],
+      },
+      options: { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
+    })
+    table('t-pages', [{ key: 'path', label: 'Path', cls: 'path' }, { key: 'views', label: 'Views', num: true, fmt }, { key: 'visitors', label: 'Visitor-days', num: true, fmt }], d.top_pages)
+    table('t-refs', kv, d.referrers)
+    table('t-utm', kv, d.utm_sources)
+    table('t-countries', kv, d.countries)
+    table('t-devices', kv, d.devices)
+    table('t-browsers', kv, d.browsers)
+    table('t-engage', [
+      { key: 'path', label: 'Path', cls: 'path' },
+      { key: 'n', label: 'Leaves', num: true, fmt },
+      { key: 'avg_ms', label: 'Avg time', num: true, fmt: secs },
+      { key: 'avg_scroll', label: 'Avg scroll', num: true, fmt: (v) => (v == null ? '–' : Math.round(v) + '%') },
+    ], d.engagement)
+  }
+
+  async function loadGames() {
+    const d = await api('/admin/api/games?days=' + state.days)
+    const root = $('tab-games')
+    root.replaceChildren()
+    const overview = el('div', null, 'panel wide')
+    overview.append(el('h2', 'Games'))
+    table(overview.appendChild(el('table')), [
+      { key: 'game', label: 'Game' },
+      { key: 'opens', label: 'Opens (game_start)', num: true, fmt },
+      { key: 'runs', label: 'Runs (game_over)', num: true, fmt },
+      { key: 'avg_run_ms', label: 'Avg run', num: true, fmt: secs },
+      { key: 'avg_session_ms', label: 'Avg time on page', num: true, fmt: secs },
+      { key: 'best', label: 'Best score', num: true, fmt },
+    ], d.games)
+    root.append(overview)
+    if (!d.games.length) return
+    for (const g of d.games) {
+      const funnel = el('div', null, 'panel')
+      funnel.append(el('h2', g.game + ' · stage reached / dropped'))
+      const fc = el('canvas'); fc.id = 'c-funnel-' + g.game
+      funnel.appendChild(el('div', null, 'chart')).append(fc)
+      const hist = el('div', null, 'panel')
+      hist.append(el('h2', g.game + ' · score distribution'))
+      const hc = el('canvas'); hc.id = 'c-hist-' + g.game
+      hist.appendChild(el('div', null, 'chart')).append(hc)
+      root.append(funnel, hist)
+      chart(fc, {
+        type: 'bar',
+        data: {
+          labels: g.funnel.map((r) => 'Stage ' + r.stage),
+          datasets: [
+            { label: 'Reached', data: g.funnel.map((r) => r.reached), backgroundColor: css('--accent') },
+            { label: 'Ended here', data: g.funnel.map((r) => r.dropped), backgroundColor: css('--warn') },
+          ],
+        },
+        options: { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
+      })
+      chart(hc, {
+        type: 'bar',
+        data: {
+          labels: g.score_histogram.map((b) => (b.from === b.to ? b.from : b.from + '–' + b.to)),
+          datasets: [{ label: 'Runs', data: g.score_histogram.map((b) => b.n), backgroundColor: css('--accent-2') }],
+        },
+        options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
+      })
+    }
+  }
+
+  async function loadLive() {
+    const d = await api('/admin/api/realtime')
+    const viewers = d.current_pages.reduce((a, r) => a + r.viewers, 0)
+    kpis('live-kpis', [['Events · last 30 min', fmt(d.events_30m)], ['Sessions active · last 5 min', fmt(viewers)], ['Updated', new Date().toLocaleTimeString()]])
+    table('t-live-types', [{ key: 'type', label: 'Type' }, { key: 'n', label: 'Events', num: true, fmt }], d.by_type_30m)
+    table('t-live-pages', [{ key: 'path', label: 'Path', cls: 'path' }, { key: 'viewers', label: 'Sessions', num: true, fmt }], d.current_pages)
+  }
+
+  async function load() {
+    clearInterval(liveTimer)
+    status('Loading…')
+    try {
+      if (state.tab === 'site') await loadSite()
+      else if (state.tab === 'games') await loadGames()
+      else {
+        await loadLive()
+        liveTimer = setInterval(() => loadLive().catch((e) => status(e.message, true)), 30_000)
+      }
+      status(window.Chart ? '' : 'Chart.js did not load; tables only.')
+    } catch (e) {
+      status(e.message, true)
+    }
+  }
+
+  function press(group, attr, value) {
+    for (const b of $(group).querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset[attr] === String(value)))
+  }
+  $('tabs').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-tab]')
+    if (!b) return
+    state.tab = b.dataset.tab
+    press('tabs', 'tab', state.tab)
+    for (const t of ['site', 'games', 'live']) $('tab-' + t).hidden = t !== state.tab
+    $('range').hidden = state.tab === 'live'
+    load()
+  })
+  $('range').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-days]')
+    if (!b) return
+    state.days = Number(b.dataset.days)
+    press('range', 'days', state.days)
+    load()
+  })
+  $('agg').addEventListener('click', async () => {
+    status('Aggregating…')
+    try {
+      const r = await api('/admin/api/aggregate', { method: 'POST' })
+      status('Aggregated ' + r.day + ': ' + Object.keys(r.metrics).length + ' metrics. /public/summary may be cached for up to an hour.')
+    } catch (e) {
+      status(e.message, true)
+    }
+  })
+  load()
+})()
+</script>
+</body>
+</html>
