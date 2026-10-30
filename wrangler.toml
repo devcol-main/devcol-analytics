@@ -9,6 +9,16 @@ routes = [{ pattern = "a.devcol.net", custom_domain = true }]
 [vars]
 ALLOWED_ORIGINS = "https://devcol.net,https://www.devcol.net"
 ALLOW_LOCALHOST = "false"
+# 리더보드 닉네임 AI 검사 (Workers AI 무료 할당 안에서만). "off"면 규칙 검사만.
+AI_MODERATION = "on"
+AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8-fast"
+# 하루(UTC) AI 호출 상한. 호출당 ~0.7 Neurons → 1000회 ≈ 700 Neurons (무료 10,000의 7%)
+AI_DAILY_CAP = "1000"
+SITE_ORIGIN = "https://devcol.net"
+
+[ai]
+binding = "AI"
+remote = true
 
 [[d1_databases]]
 binding = "DB"

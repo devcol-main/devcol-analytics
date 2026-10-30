@@ -2,6 +2,7 @@ import type { AppEnv } from './env'
 import { aggregateDay } from './aggregate'
 import { DAY_MS, isDay, json, kstDay } from './util'
 import adminHtml from './admin.html'
+import { handleLbAdmin } from './lb/admin'
 
 // ---------- Cloudflare Access JWT 검증 (Access 설정 누락 시 이중 방어) ----------
 
@@ -209,6 +210,8 @@ export async function handleAdmin(req: Request, env: AppEnv): Promise<Response> 
   if (path === '/admin/api/realtime' && req.method === 'GET') {
     return json(await realtime(env.DB, now), { headers: NO_STORE })
   }
+  const lb = await handleLbAdmin(req, env, path, url, now)
+  if (lb) return lb
   // 집계 수동 트리거 (스모크 테스트/백필용). 기본값은 오늘(KST).
   if (path === '/admin/api/aggregate' && req.method === 'POST') {
     const day = url.searchParams.get('day') ?? kstDay(now)

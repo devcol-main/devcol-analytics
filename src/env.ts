@@ -8,6 +8,16 @@ export interface AppEnv {
   ACCESS_TEAM_DOMAIN?: string
   /** Cloudflare Access Application AUD 태그 (wrangler secret) */
   ACCESS_AUD?: string
+  /** Workers AI (닉네임 검사). 없으면 규칙 검사만 한다. */
+  AI?: Ai
+  /** "off"면 AI 검사를 끈다 */
+  AI_MODERATION?: string
+  /** Workers AI 모델 id */
+  AI_MODEL?: string
+  /** AI 하루(UTC) 호출 상한. 무료 10,000 Neurons/일보다 한참 낮게 */
+  AI_DAILY_CAP?: string
+  /** 게임 slug 확인용 사이트 주소 (첫 제출 때 /games/<slug>/가 있는지 본다) */
+  SITE_ORIGIN?: string
 }
 
 declare global {
