@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:test'
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { __setJwksForTest, histogram } from '../src/admin'
 import { kstDay } from '../src/util'
@@ -135,5 +136,122 @@ describe('/admin/api', () => {
     expect(h.length).toBeLessThanOrEqual(10)
     expect(h.reduce((a, b) => a + b.n, 0)).toBe(5)
     expect(histogram([7, 7])).toEqual([{ from: 7, to: 7, n: 2 }])
+  })
+})
+
+describe('/admin/api/lb', () => {
+  const lbSubmit = (name: string, score = 10, ip = `198.51.100.${Math.floor(Math.random() * 250)}`) =>
+    call(
+      new Request('https://a.devcol.net/lb/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain', Origin: 'https://devcol.net', 'CF-Connecting-IP': ip },
+        body: JSON.stringify({ game: 'stack-up', name, score, durationMs: 20_000 }),
+      }),
+    ).then((r) => r.json() as Promise<Record<string, unknown>>)
+
+  async function act(body: Record<string, unknown>, token?: string, xAdmin = true) {
+    const headers = new Headers({ 'Content-Type': 'application/json' })
+    if (token) headers.set('Cf-Access-Jwt-Assertion', token)
+    if (xAdmin) headers.set('X-Admin', '1')
+    return call(new Request('https://a.devcol.net/admin/api/lb/action', { method: 'POST', headers, body: JSON.stringify(body) }))
+  }
+  const topNames = async () =>
+    ((await (await call(new Request('https://a.devcol.net/lb/top?game=stack-up'))).json()) as { entries: { name: string }[] }).entries.map((e) => e.name)
+
+  beforeEach(async () => {
+    await env.DB.prepare(
+      "INSERT INTO lb_games (slug, max_score, max_score_per_sec, min_duration_ms, enabled, created_at) VALUES ('stack-up', 1e7, 0, 1000, 1, 0)",
+    ).run()
+  })
+
+  it('every lb admin route needs a valid Access token; writes also need X-Admin', async () => {
+    for (const p of ['entries', 'games', 'terms', 'usage']) expect((await call(adminReq(`/admin/api/lb/${p}`))).status).toBe(403)
+    const { entryId } = await lbSubmit('Alpha')
+    expect((await act({ action: 'hide', entryId })).status).toBe(403)
+    const token = await sign(claims())
+    expect((await act({ action: 'hide', entryId }, token, false)).status).toBe(403)
+    expect((await act({ action: 'hide', entryId }, token)).status).toBe(200)
+    expect(await topNames()).toEqual([])
+  })
+
+  it('entries list with filters and report counts', async () => {
+    const token = await sign(claims())
+    const a = await lbSubmit('Alpha', 5)
+    await lbSubmit('fuck', 3)
+    await call(
+      new Request('https://a.devcol.net/lb/report', {
+        method: 'POST',
+        headers: { Origin: 'https://devcol.net', 'CF-Connecting-IP': '203.0.113.1' },
+        body: JSON.stringify({ entryId: a.entryId }),
+      }),
+    )
+    const list = async (q: string) =>
+      ((await (await call(adminReq(`/admin/api/lb/entries${q}`, token))).json()) as { entries: Record<string, unknown>[] }).entries
+    expect(await list('')).toHaveLength(2)
+    expect(await list('?filter=reported')).toEqual([expect.objectContaining({ id: a.entryId, reports: 1, name: 'Alpha' })])
+    expect((await list('?filter=renamed')).map((e) => e.name_status)).toEqual(['rules_fallback'])
+    expect(await list('?q=Alph')).toHaveLength(1)
+    expect(await list('?game=bug-squash')).toEqual([])
+  })
+
+  it('rename locks a neutral name; unlock clears reports; delete removes the row', async () => {
+    const token = await sign(claims())
+    const a = await lbSubmit('Alpha')
+    await act({ action: 'rename', entryId: a.entryId }, token)
+    const [name] = await topNames()
+    expect(name).toMatch(/^Player\d{4}$/)
+    expect(await env.DB.prepare('SELECT name_status, name_locked FROM lb_entries WHERE id = ?').bind(a.entryId).first()).toEqual({
+      name_status: 'admin_renamed',
+      name_locked: 1,
+    })
+    await act({ action: 'unlock', entryId: a.entryId }, token)
+    expect((await env.DB.prepare('SELECT name_locked FROM lb_entries WHERE id = ?').bind(a.entryId).first<{ name_locked: number }>())!.name_locked).toBe(0)
+    await act({ action: 'delete', entryId: a.entryId }, token)
+    expect(await topNames()).toEqual([])
+    expect((await act({ action: 'delete', entryId: a.entryId }, token)).status).toBe(404)
+  })
+
+  it('ban_owner renames all their rows and keeps future names neutral', async () => {
+    const token = await sign(claims())
+    const a = await lbSubmit('Alpha')
+    await act({ action: 'ban_owner', entryId: a.entryId }, token)
+    const res = await call(
+      new Request('https://a.devcol.net/lb/submit', {
+        method: 'POST',
+        headers: { Origin: 'https://devcol.net', 'CF-Connecting-IP': '203.0.113.2' },
+        body: JSON.stringify({ game: 'stack-up', name: 'Nice Name', score: 99, durationMs: 20_000, token: a.token }),
+      }),
+    )
+    expect(await res.json()).toMatchObject({ nameStatus: 'banned_owner', publishedName: expect.stringMatching(/^Player\d{4}$/) })
+  })
+
+  it('ban_name and add_term rescan published names', async () => {
+    const token = await sign(claims())
+    await lbSubmit('Noobking')
+    await lbSubmit('noob master')
+    await lbSubmit('Clean')
+    const res = await act({ action: 'add_term', term: 'noob' }, token)
+    expect(await res.json()).toEqual({ renamed: 2 })
+    expect((await topNames()).filter((n) => !/^Player\d{4}$/.test(n))).toEqual(['Clean'])
+    const terms = (await (await call(adminReq('/admin/api/lb/terms', token))).json()) as { terms: { term: string }[] }
+    expect(terms.terms.map((t) => t.term)).toEqual(['noob'])
+    await act({ action: 'remove_term', term: 'noob' }, token)
+    expect(((await (await call(adminReq('/admin/api/lb/terms', token))).json()) as { terms: unknown[] }).terms).toEqual([])
+
+    const c = (await (await call(adminReq('/admin/api/lb/entries?q=Clean', token))).json()) as { entries: { id: number }[] }
+    expect(await (await act({ action: 'ban_name', entryId: c.entries[0].id }, token)).json()).toEqual({ renamed: 1 })
+    expect((await act({ action: 'add_term', term: '' }, token)).status).toBe(400)
+    expect((await act({ action: 'nope' }, token)).status).toBe(400)
+  })
+
+  it('update_game edits bounds; usage reports the AI cap', async () => {
+    const token = await sign(claims())
+    expect((await act({ action: 'update_game', slug: 'stack-up', max_score: 50, max_score_per_sec: 0, min_duration_ms: 1000, stat_max: { stage: 5 } }, token)).status).toBe(200)
+    expect((await act({ action: 'update_game', slug: 'missing', max_score: 1 }, token)).status).toBe(404)
+    const games = (await (await call(adminReq('/admin/api/lb/games', token))).json()) as { games: Record<string, unknown>[] }
+    expect(games.games[0]).toMatchObject({ slug: 'stack-up', max_score: 50, stat_max: '{"stage":5}', enabled: 1 })
+    expect(await lbSubmit('Alpha', 60)).toEqual({ error: 'out_of_bounds' })
+    const usage = await (await call(adminReq('/admin/api/lb/usage', token))).json()
+    expect(usage).toMatchObject({ calls: expect.any(Number), cap: 1000, enabled: true })
   })
 })

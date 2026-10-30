@@ -7,12 +7,31 @@ export const UA_DESKTOP =
 export const UA_IPHONE =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
 
+/** 가짜 Workers AI. reply(이름)이 모델 답 텍스트를 정한다 (기본: 모두 SAFE). 부른 이름은 calls에 쌓인다. */
+export function fakeAi(reply: (name: string) => string | Promise<string> = () => 'SAFE') {
+  const calls: string[] = []
+  const ai = {
+    calls,
+    async run(_model: string, input: { messages: { role: string; content: string }[] }) {
+      const user = input.messages.find((m) => m.role === 'user')?.content ?? ''
+      const name = /"(.*)"/.exec(user)?.[1] ?? user
+      calls.push(name)
+      return { response: await reply(name) }
+    },
+  }
+  return ai as typeof ai & Ai
+}
+
 export const testEnv = (over: Partial<AppEnv> = {}): AppEnv => ({
   DB: env.DB,
   ALLOWED_ORIGINS: 'https://devcol.net,https://www.devcol.net',
   ALLOW_LOCALHOST: 'false',
   ACCESS_TEAM_DOMAIN: 'test.cloudflareaccess.com',
   ACCESS_AUD: 'test-aud',
+  AI: fakeAi(),
+  AI_MODERATION: 'on',
+  AI_DAILY_CAP: '1000',
+  SITE_ORIGIN: 'https://devcol.net',
   ...over,
 })
 
@@ -63,5 +82,8 @@ export async function resetDb() {
     env.DB.prepare('DELETE FROM events'),
     env.DB.prepare('DELETE FROM daily_stats'),
     env.DB.prepare('DELETE FROM salts'),
+    ...['lb_games', 'lb_owners', 'lb_entries', 'lb_names', 'lb_terms', 'lb_reports', 'lb_ai_usage', 'lb_rate'].map((t) =>
+      env.DB.prepare(`DELETE FROM ${t}`),
+    ),
   ])
 }

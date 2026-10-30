@@ -18,6 +18,7 @@ SITE_ORIGIN = "https://devcol.net"
 
 [ai]
 binding = "AI"
+remote = true
 
 [[d1_databases]]
 binding = "DB"

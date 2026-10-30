@@ -41,6 +41,13 @@
   .err { color: var(--warn); }
   [hidden] { display: none !important; }
   .tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .lb-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .lb-filters select, .lb-filters input, .panel input { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+  .panel input.num { width: 9em; }
+  .row-acts { display: flex; flex-wrap: wrap; gap: 4px; }
+  .row-acts button, .panel button.small { border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 6px; padding: 2px 8px; font-family: inherit; font-size: 12px; cursor: pointer; }
+  .row-acts button.danger { color: var(--warn); }
+  .tag { font-size: 11px; color: var(--ink-2); }
   .tools button.act { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 6px 10px; font: inherit; cursor: pointer; }
 </style>
 </head>
@@ -52,6 +59,7 @@
       <button data-tab="site" aria-pressed="true">Site</button>
       <button data-tab="games" aria-pressed="false">Games</button>
       <button data-tab="live" aria-pressed="false">Realtime</button>
+      <button data-tab="lb" aria-pressed="false">Leaderboard</button>
     </div>
     <div class="seg" id="range">
       <button data-days="7" aria-pressed="false">7d</button>
@@ -82,6 +90,36 @@
     <div class="panel wide"><div class="kpis" id="live-kpis"></div></div>
     <div class="panel"><h2>Events by type · last 30 min</h2><table id="t-live-types"></table></div>
     <div class="panel"><h2>Being viewed now (last 5 min)</h2><table id="t-live-pages"></table></div>
+  </section>
+
+  <section id="tab-lb" class="grid" hidden>
+    <div class="panel wide"><div class="kpis" id="lb-kpis"></div></div>
+    <div class="panel wide">
+      <h2>Entries</h2>
+      <div class="lb-filters">
+        <select id="lb-filter" aria-label="Filter">
+          <option value="all">All</option>
+          <option value="reported">Reported</option>
+          <option value="unchecked">AI not checked yet</option>
+          <option value="renamed">Renamed</option>
+          <option value="hidden">Hidden</option>
+        </select>
+        <select id="lb-game" aria-label="Game"><option value="">All games</option></select>
+        <input id="lb-q" type="search" placeholder="Search name" aria-label="Search name">
+      </div>
+      <table id="t-lb-entries"></table>
+    </div>
+    <div class="panel">
+      <h2>Extra blocked terms</h2>
+      <p class="muted">Matched as substrings after the same normalization as the built-in list. Adding a term renames matching published names.</p>
+      <form id="lb-term-form" class="lb-filters"><input id="lb-term" maxlength="40" placeholder="term" aria-label="New term"><button class="small" type="submit">Add</button></form>
+      <table id="t-lb-terms"></table>
+    </div>
+    <div class="panel">
+      <h2>Game bounds</h2>
+      <p class="muted">Games register themselves on first submit with loose defaults. Submits outside these bounds are rejected. 0 per second = no check.</p>
+      <div id="lb-games"></div>
+    </div>
   </section>
 </main>
 <script>
@@ -234,12 +272,155 @@
     table('t-live-pages', [{ key: 'path', label: 'Path', cls: 'path' }, { key: 'viewers', label: 'Sessions', num: true, fmt }], d.current_pages)
   }
 
+  // ---------- Leaderboard ----------
+  const lbState = { filter: 'all', game: '', q: '' }
+  const when = (ms) => (ms ? new Date(ms).toLocaleString() : '–')
+
+  async function lbAction(body, confirmText) {
+    if (confirmText && !confirm(confirmText)) return
+    status('Working…')
+    try {
+      const r = await api('/admin/api/lb/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin': '1' },
+        body: JSON.stringify(body),
+      })
+      await loadLb()
+      status(r.renamed != null ? 'Done. Renamed ' + r.renamed + ' published name(s).' : r.deleted != null ? 'Deleted ' + r.deleted + ' entr(y/ies).' : 'Done.')
+    } catch (e) {
+      status(e.message, true)
+    }
+  }
+
+  function rowActions(r) {
+    const box = el('div', null, 'row-acts')
+    const btn = (label, body, confirmText, danger) => {
+      const b = el('button', label, danger ? 'danger' : '')
+      b.type = 'button'
+      b.addEventListener('click', () => lbAction({ entryId: r.id, ...body }, confirmText))
+      box.append(b)
+    }
+    btn(r.hidden ? 'Unhide' : 'Hide', { action: r.hidden ? 'unhide' : 'hide' })
+    btn('Rename', { action: 'rename' }, 'Replace this name with Player#### and lock it?')
+    if (r.name_locked) btn('Unlock name', { action: 'unlock' })
+    if (r.reports) btn('Dismiss reports', { action: 'dismiss_reports' })
+    btn('Ban name', { action: 'ban_name' }, 'Add this name to the blocked terms and rename every published name that contains it?', true)
+    btn(r.banned ? 'Unban player' : 'Ban player', { action: r.banned ? 'unban_owner' : 'ban_owner' }, r.banned ? null : 'Ban this player? All their names become Player####.', true)
+    btn('Delete', { action: 'delete' }, 'Delete this entry?', true)
+    btn('Delete player', { action: 'delete_owner' }, 'Delete every entry of this player in all games, and their token?', true)
+    return box
+  }
+
+  function gameForm(g) {
+    const form = el('form', null, 'lb-filters')
+    form.append(el('b', g.slug))
+    const field = (label, key, value) => {
+      const l = el('label', label + ' ', 'tag')
+      const i = el('input', null, 'num')
+      i.name = key
+      i.value = value == null ? '' : String(value)
+      l.append(i)
+      form.append(l)
+      return i
+    }
+    field('max score', 'max_score', g.max_score)
+    field('max / sec', 'max_score_per_sec', g.max_score_per_sec)
+    field('min ms', 'min_duration_ms', g.min_duration_ms)
+    const statMax = field('stat max (JSON)', 'stat_max', g.stat_max || '')
+    statMax.className = ''
+    const en = el('label', ' enabled', 'tag')
+    const cb = el('input')
+    cb.type = 'checkbox'
+    cb.checked = !!g.enabled
+    en.prepend(cb)
+    form.append(en)
+    const save = el('button', 'Save', 'small')
+    save.type = 'submit'
+    form.append(save)
+    form.addEventListener('submit', (e) => {
+      e.preventDefault()
+      let stat = null
+      if (statMax.value.trim()) {
+        try { stat = JSON.parse(statMax.value) } catch { return status('stat max must be JSON like {"maxCombo": 500}', true) }
+      }
+      const n = (k) => Number(form.elements[k].value)
+      lbAction({ action: 'update_game', slug: g.slug, max_score: n('max_score'), max_score_per_sec: n('max_score_per_sec'), min_duration_ms: n('min_duration_ms'), stat_max: stat, enabled: cb.checked })
+    })
+    return form
+  }
+
+  async function loadLb() {
+    const qs = new URLSearchParams({ filter: lbState.filter })
+    if (lbState.game) qs.set('game', lbState.game)
+    if (lbState.q) qs.set('q', lbState.q)
+    const [usage, games, terms, entries] = await Promise.all([
+      api('/admin/api/lb/usage'),
+      api('/admin/api/lb/games'),
+      api('/admin/api/lb/terms'),
+      api('/admin/api/lb/entries?' + qs),
+    ])
+    kpis('lb-kpis', [
+      ['AI checks today (UTC) / cap', fmt(usage.calls) + ' / ' + fmt(usage.cap)],
+      [usage.enabled ? 'AI moderation · ' + (usage.model || 'default model') : 'AI moderation', usage.enabled ? 'on' : 'off (rules only)'],
+      ['Games', games.games.length],
+    ])
+
+    const sel = $('lb-game')
+    sel.replaceChildren(el('option', 'All games'))
+    sel.firstChild.value = ''
+    for (const g of games.games) {
+      const o = el('option', g.slug)
+      o.value = g.slug
+      sel.append(o)
+    }
+    sel.value = lbState.game
+
+    const t = table('t-lb-entries', [
+      { key: 'game', label: 'Game' },
+      { key: 'name', label: 'Name', cls: 'path' },
+      { key: 'name_status', label: 'Status', fmt: (v, r) => v + (r.name_locked ? ' · locked' : '') + (r.hidden ? ' · hidden' : '') + (r.banned ? ' · banned' : '') },
+      { key: 'score', label: 'Score', num: true, fmt },
+      { key: 'reports', label: 'Reports', num: true, fmt },
+      { key: 'updated_at', label: 'Last submit', fmt: when },
+      { key: 'id', label: 'Actions', fmt: () => '' },
+    ], entries.entries)
+    // 마지막 열에 버튼을 붙인다 (값은 textContent로만 넣었다)
+    const rows = t.querySelectorAll('tbody tr')
+    entries.entries.forEach((r, i) => rows[i].lastChild.append(rowActions(r)))
+
+    const tt = table('t-lb-terms', [{ key: 'term', label: 'Term' }, { key: 'added_at', label: 'Added', fmt: when }, { key: 'term', label: '', fmt: () => '' }], terms.terms)
+    tt.querySelectorAll('tbody tr').forEach((tr, i) => {
+      const b = el('button', 'Remove', 'small')
+      b.type = 'button'
+      b.addEventListener('click', () => lbAction({ action: 'remove_term', term: terms.terms[i].term }, 'Remove this term? Names already renamed stay renamed.'))
+      tr.lastChild.append(b)
+    })
+
+    $('lb-games').replaceChildren(...(games.games.length ? games.games.map(gameForm) : [el('p', 'No games yet.', 'muted')]))
+  }
+
+  $('lb-filter').addEventListener('change', (e) => { lbState.filter = e.target.value; loadLb().catch((x) => status(x.message, true)) })
+  $('lb-game').addEventListener('change', (e) => { lbState.game = e.target.value; loadLb().catch((x) => status(x.message, true)) })
+  let qTimer = 0
+  $('lb-q').addEventListener('input', (e) => {
+    clearTimeout(qTimer)
+    qTimer = setTimeout(() => { lbState.q = e.target.value.trim(); loadLb().catch((x) => status(x.message, true)) }, 300)
+  })
+  $('lb-term-form').addEventListener('submit', (e) => {
+    e.preventDefault()
+    const term = $('lb-term').value.trim()
+    if (!term) return
+    $('lb-term').value = ''
+    lbAction({ action: 'add_term', term })
+  })
+
   async function load() {
     clearInterval(liveTimer)
     status('Loading…')
     try {
       if (state.tab === 'site') await loadSite()
       else if (state.tab === 'games') await loadGames()
+      else if (state.tab === 'lb') await loadLb()
       else {
         await loadLive()
         liveTimer = setInterval(() => loadLive().catch((e) => status(e.message, true)), 30_000)
@@ -258,8 +439,8 @@
     if (!b) return
     state.tab = b.dataset.tab
     press('tabs', 'tab', state.tab)
-    for (const t of ['site', 'games', 'live']) $('tab-' + t).hidden = t !== state.tab
-    $('range').hidden = state.tab === 'live'
+    for (const t of ['site', 'games', 'live', 'lb']) $('tab-' + t).hidden = t !== state.tab
+    $('range').hidden = state.tab === 'live' || state.tab === 'lb'
     load()
   })
   $('range').addEventListener('click', (e) => {
